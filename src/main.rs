@@ -1,47 +1,67 @@
+// Some good reference for streams
+// https://github.com/thepacketgeek/rust-tcpstream-demo
+
 use std::{
     io::{BufRead, BufReader, Read, Write},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
+    thread,
 };
 
 fn main() {
     let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
 
     for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                let mut writer = stream.try_clone().unwrap();
-                let mut reader = BufReader::new(&stream);
+        thread::spawn(|| handle_request(stream));
+    }
+}
 
-                loop {
-                    let mut command = String::new();
-                    reader.read_line(&mut command).unwrap();
+fn handle_request(stream: Result<TcpStream, std::io::Error>) {
+    match stream {
+        Ok(stream) => match process_request(stream) {
+            Ok(_) => (),
+            Err(err) => println!("error handlign request: {err:?}"),
+        },
+        Err(e) => {
+            println!("error: {}", e);
+        }
+    }
+}
 
-                    // TODO: Array and Bulk string
-                    if command.starts_with('*') || command.starts_with('$') {
-                        continue;
-                    }
+fn process_request(stream: TcpStream) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut writer = stream.try_clone()?;
+    let mut reader = BufReader::new(stream);
 
-                    match command.to_lowercase().as_str().trim_end() {
-                        "ping" => {
-                            let buf = "+PONG\r\n".as_bytes();
-                            writer.write_all(buf).unwrap();
-                        }
-                        v => {
-                            println!("{v} NOT IMPLEMENTED");
+    loop {
+        let mut command = String::new();
+        reader.read_line(&mut command)?;
 
-                            // TODO: This should probably not disconnect but the example
-                            //   `echo -e "ping\nping\n" | redis-cli`
-                            // seems to disconnect and send three different commands somehow.
-                            break;
-                        }
-                    }
-                }
+        if command.is_empty() {
+            break;
+        }
+
+        // TODO: Array and Bulk string
+        if command.starts_with('*') || command.starts_with('$') {
+            continue;
+        }
+
+        match command.to_lowercase().as_str().trim_end() {
+            "ping" => {
+                let buf = "+PONG\r\n".as_bytes();
+                writer.write_all(buf)?;
             }
-            Err(e) => {
-                println!("error: {}", e);
+            v => {
+                // TODO: This should probably not disconnect but the example
+                //   `echo -e "ping\nping\n" | redis-cli`
+                // seems to disconnect and send three different commands somehow.
+                return Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("'{v}' not implemented"),
+                )));
             }
         }
     }
+
+    Ok(())
 }
 
 #[allow(dead_code)]

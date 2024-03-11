@@ -72,67 +72,25 @@ fn process_resp_type(
             // safety: We just checked for length.
             let command = &arr[0];
 
-            // TODO: Ugh this isn't nice... - refactor
             match process_resp_type(command)? {
-                Command::Ping => Ok(Command::Ping),
-                Command::Echo(_) => {
-                    let rest = &arr[1..]
-                        .iter()
-                        .filter_map(|x| match x {
-                            RespType::BulkString(_, s) => Some(s.trim_end()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" ");
-
-                    Ok(Command::Echo(rest.to_owned()))
+                Command::Literal(s) if s.to_lowercase() == "ping" => Ok(Command::Ping),
+                Command::Literal(s) if s.to_lowercase() == "echo" => {
+                    let arg = process_resp_type(&arr[1])?.literal_value()?;
+                    Ok(Command::Echo(arg))
                 }
-                Command::Set(_, _) => {
-                    let key = match &arr[1] {
-                        RespType::BulkString(_, s) => Some(s.trim_end()),
-                        _ => None,
-                    }
-                    .ok_or_else(|| {
-                        std::io::Error::new(std::io::ErrorKind::Other, "minssing key")
-                    })?;
-                    let value = match &arr[2] {
-                        RespType::BulkString(_, s) => Some(s.trim_end()),
-                        _ => None,
-                    }
-                    .ok_or_else(|| {
-                        std::io::Error::new(std::io::ErrorKind::Other, "minssing value")
-                    })?;
-
-                    Ok(Command::Set(key.to_string(), value.to_string()))
+                Command::Literal(s) if s.to_lowercase() == "set" => {
+                    let key = process_resp_type(&arr[1])?.literal_value()?;
+                    let value = process_resp_type(&arr[2])?.literal_value()?;
+                    Ok(Command::Set(key, value))
                 }
-                Command::Get(_) => {
-                    let key = match &arr[1] {
-                        RespType::BulkString(_, s) => Some(s.trim_end()),
-                        _ => None,
-                    }
-                    .ok_or_else(|| {
-                        std::io::Error::new(std::io::ErrorKind::Other, "minssing key")
-                    })?;
-
-                    Ok(Command::Get(key.to_string()))
+                Command::Literal(s) if s.to_lowercase() == "get" => {
+                    let key = process_resp_type(&arr[1])?.literal_value()?;
+                    Ok(Command::Get(key))
                 }
+                v => Ok(v),
             }
         }
-        RespType::BulkString(_, command) => match command.to_lowercase().trim_end() {
-            "ping" => Ok(Command::Ping),
-            // TODO: This won't do - can't hack an empty string. Should use separate enums, I
-            // guess?
-            "echo" => Ok(Command::Echo("".to_string())),
-            "set" => Ok(Command::Set("".to_string(), "".to_string())),
-            "get" => Ok(Command::Get("".to_string())),
-            // TODO: This should probably not disconnect but the example
-            //   `echo -e "ping\nping\n" | redis-cli`
-            // seems to disconnect and send three different commands somehow.
-            command => Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("'{command:?}' not implemented"),
-            ))),
-        },
+        RespType::BulkString(_, command) => Ok(Command::Literal(command.trim_end().to_string())),
         _ => todo!(),
     }
 }
@@ -143,6 +101,11 @@ fn process_command(
     writer: &mut TcpStream,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match command {
+        Command::Literal(value) => {
+            let err = format!("-ERROR '{value}' not implemented\r\n");
+            let buf = err.as_bytes();
+            writer.write_all(buf)?;
+        }
         Command::Ping => {
             let buf = "+PONG\r\n".as_bytes();
             writer.write_all(buf)?;

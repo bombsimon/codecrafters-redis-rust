@@ -1,9 +1,11 @@
+use std::time::Duration;
+
 #[derive(Debug)]
 pub enum Command {
     Literal(String),
     Ping,
     Echo(String),
-    Set(String, String),
+    Set(String, String, Option<Duration>),
     Get(String),
 }
 

@@ -1,6 +1,7 @@
 use crate::resp_type::RespType;
 use crate::{cache::Cache, command::Command};
 
+use std::time::Duration;
 use std::{
     io::{BufReader, Read, Write},
     net::{TcpListener, TcpStream},
@@ -77,7 +78,25 @@ fn process_resp_type(
                 Command::Literal(s) if s.to_lowercase() == "set" => {
                     let key = process_resp_type(&arr[1])?.literal_value()?;
                     let value = process_resp_type(&arr[2])?.literal_value()?;
-                    Ok(Command::Set(key, value))
+
+                    match (arr.get(3), arr.get(4)) {
+                        (Some(a), Some(b)) => {
+                            let arg = process_resp_type(a)?.literal_value()?;
+                            if arg.to_lowercase() != "px" {
+                                return Ok(Command::Set(key, value, None));
+                            }
+
+                            let arg_value =
+                                process_resp_type(b)?.literal_value()?.parse::<u64>()?;
+
+                            Ok(Command::Set(
+                                key,
+                                value,
+                                Some(Duration::from_millis(arg_value)),
+                            ))
+                        }
+                        _ => Ok(Command::Set(key, value, None)),
+                    }
                 }
                 Command::Literal(s) if s.to_lowercase() == "get" => {
                     let key = process_resp_type(&arr[1])?.literal_value()?;
@@ -113,9 +132,9 @@ fn process_command(
 
             writer.write_all(buf)?;
         }
-        Command::Set(key, value) => {
+        Command::Set(key, value, ttl) => {
             let mut c = cache.lock().unwrap();
-            c.set(&key, &value, None);
+            c.set(&key, &value, ttl);
 
             let buf = "+OK\r\n".as_bytes();
             writer.write_all(buf)?;

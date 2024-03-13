@@ -1,8 +1,7 @@
-use crate::command::Command;
 use crate::resp_type::RespType;
+use crate::{cache::Cache, command::Command};
 
 use std::{
-    collections::HashMap,
     io::{BufReader, Read, Write},
     net::{TcpListener, TcpStream},
     sync::{Arc, Mutex},
@@ -11,31 +10,28 @@ use std::{
 
 pub struct Server {
     listener: TcpListener,
-    storage: Arc<Mutex<HashMap<String, String>>>,
+    cache: Arc<Mutex<Cache>>,
 }
 
 impl Server {
     pub fn new(addr: &str) -> Arc<Self> {
         Arc::new(Self {
             listener: TcpListener::bind(addr).unwrap(),
-            storage: Arc::new(Mutex::new(HashMap::new())),
+            cache: Arc::new(Mutex::new(Cache::new(1))),
         })
     }
 
     pub fn serve_forever(&self) {
         for stream in self.listener.incoming() {
-            let s = self.storage.clone();
-            thread::spawn(|| handle_request(stream, s));
+            let c = self.cache.clone();
+            thread::spawn(|| handle_request(stream, c));
         }
     }
 }
 
-fn handle_request(
-    stream: Result<TcpStream, std::io::Error>,
-    storage: Arc<Mutex<HashMap<String, String>>>,
-) {
+fn handle_request(stream: Result<TcpStream, std::io::Error>, cache: Arc<Mutex<Cache>>) {
     match stream {
-        Ok(stream) => match process_request(stream, storage) {
+        Ok(stream) => match process_request(stream, cache) {
             Ok(_) => (),
             Err(err) => println!("error handlign request: {err:?}"),
         },
@@ -47,7 +43,7 @@ fn handle_request(
 
 fn process_request(
     stream: TcpStream,
-    storage: Arc<Mutex<HashMap<String, String>>>,
+    cache: Arc<Mutex<Cache>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut writer = stream.try_clone()?;
     let mut reader = BufReader::new(stream);
@@ -60,7 +56,7 @@ fn process_request(
         };
 
         let command = process_resp_type(&resp_type)?;
-        process_command(command, storage.clone(), &mut writer)?;
+        process_command(command, cache.clone(), &mut writer)?;
     }
 }
 
@@ -97,7 +93,7 @@ fn process_resp_type(
 
 fn process_command(
     command: Command,
-    storage: Arc<Mutex<HashMap<String, String>>>,
+    cache: Arc<Mutex<Cache>>,
     writer: &mut TcpStream,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match command {
@@ -118,16 +114,15 @@ fn process_command(
             writer.write_all(buf)?;
         }
         Command::Set(key, value) => {
-            let mut s = storage.lock().unwrap();
-            let v = s.entry(key).or_default();
-            *v = value;
+            let mut c = cache.lock().unwrap();
+            c.set(&key, &value, None);
 
             let buf = "+OK\r\n".as_bytes();
             writer.write_all(buf)?;
         }
         Command::Get(key) => {
-            let s = storage.lock().unwrap();
-            match s.get(&key) {
+            let c = cache.lock().unwrap();
+            match c.get(&key) {
                 Some(value) => {
                     let size = value.len();
                     let reply = format!("${size}\r\n{value}\r\n");
